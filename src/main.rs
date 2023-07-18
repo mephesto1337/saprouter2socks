@@ -43,7 +43,7 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
         hops,
     });
 
-    stream.write_all(sap_buffer.get_data()).await?;
+    stream.write_all(sap_buffer.as_ref()).await?;
 
     sap_buffer.extract_from_reader(&mut stream).await?;
 
