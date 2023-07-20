@@ -37,7 +37,7 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
     let mut sap_buffer = sap::SapNi::default();
     sap_buffer.set(&sap::SapRouter::Route {
         ni_version: NI_VERSION,
-        talk_mode: sap::TalkMode::RawIo,
+        talk_mode: sap::TalkMode::MsgIo,
         rest_nodes: 1,
         current_position: 1,
         hops,
@@ -45,12 +45,9 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
 
     stream.write_all(sap_buffer.as_ref()).await?;
 
-    sap_buffer.extract_from_reader(&mut stream).await?;
+    let data = sap_buffer.extract_from_reader(&mut stream).await?;
 
-    match SapRouter::decode(sap_buffer.get_data())
-        .map_err(map_nom_error)?
-        .1
-    {
+    match SapRouter::decode(data).map_err(map_nom_error)?.1 {
         SapRouter::Pong => Ok(stream),
         SapRouter::ErrorInformation {
             return_code, text, ..
@@ -119,7 +116,7 @@ async fn handle_client(sap_router: SocketAddr, mut stream: TcpStream) -> io::Res
         socks_parser::AddressType::IPv6(ip6) => format!("[{}]", ip6),
     };
 
-    let mut sap_stream = match sap_connect(sap_router, &host, request.port).await {
+    let sap_stream = match sap_connect(sap_router, &host, request.port).await {
         Ok(s) => {
             let response = socks_parser::response::Response {
                 version: socks_parser::Version::Socks5,
@@ -146,7 +143,9 @@ async fn handle_client(sap_router: SocketAddr, mut stream: TcpStream) -> io::Res
         }
     };
 
-    tokio::io::copy_bidirectional(&mut stream, &mut sap_stream).await?;
+    let mut sap_ni_stream = sap::SapNiStream::new(sap_stream);
+
+    tokio::io::copy_bidirectional(&mut stream, &mut sap_ni_stream).await?;
 
     Ok(())
 }

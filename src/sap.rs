@@ -11,7 +11,7 @@ use nom::{
     error::{context, ContextError, ErrorKind, VerboseError},
     multi::{length_data, many_m_n},
     number::streaming::{be_u16, be_u32, be_u8},
-    sequence::{terminated, tuple},
+    sequence::{preceded, terminated, tuple},
 };
 use tokio::io::AsyncReadExt;
 
@@ -19,6 +19,9 @@ pub trait Wire<'a>: Sized {
     fn encode_into(&self, buffer: &mut Vec<u8>);
     fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>>;
 }
+
+mod stream;
+pub use stream::SapNiStream;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct SapNi {
@@ -48,33 +51,48 @@ impl SapNi {
         self.buffer[..size_of::<u32>()].copy_from_slice(&obj_length.to_be_bytes()[..]);
     }
 
-    fn get_buffer_len(&self) -> usize {
-        let (_, obj_size) = be_u32::<_, ()>(&self.buffer[..]).unwrap();
-        obj_size as usize
+    fn get_buffer_len(&self) -> Option<usize> {
+        let (_, obj_size) = be_u32::<_, ()>(&self.buffer[..]).ok()?;
+        Some(obj_size as usize)
     }
 
-    pub fn get_data(&self) -> &[u8] {
-        let obj_size = self.get_buffer_len();
-        assert!(obj_size + size_of::<u32>() <= self.buffer.len());
-        &self.buffer[size_of::<u32>()..]
+    pub fn get_data(&self) -> Option<&[u8]> {
+        let obj_size = self.get_buffer_len()?;
+        if obj_size + size_of::<u32>() < self.buffer.len() {
+            None
+        } else {
+            Some(&self.buffer[size_of::<u32>()..])
+        }
     }
 
-    pub async fn extract_from_reader<R: AsyncReadExt + Unpin>(
-        &mut self,
-        reader: &mut R,
-    ) -> io::Result<()> {
+    fn append_data(&mut self, buf: &[u8]) {
+        self.buffer.reserve(buf.len() + size_of::<u32>());
+        let size = buf.len() as u32;
+        self.buffer.extend_from_slice(&size.to_be_bytes()[..]);
+        self.buffer.extend_from_slice(buf);
+    }
+
+    fn set_data(&mut self, buf: &[u8]) {
+        self.buffer.clear();
+        self.append_data(buf);
+    }
+
+    pub async fn extract_from_reader<'s, R: AsyncReadExt + Unpin>(
+        &'s mut self,
+        reader: &'_ mut R,
+    ) -> io::Result<&'s [u8]> {
         self.buffer.resize(size_of::<u32>(), 0u8);
 
         reader.read_exact(&mut self.buffer[..]).await?;
 
-        let obj_size = self.get_buffer_len();
+        let obj_size = self.get_buffer_len().unwrap();
 
         self.buffer.resize(self.buffer.len() + obj_size, 0u8);
         reader
             .read_exact(&mut self.buffer[size_of::<u32>()..])
             .await?;
 
-        Ok(())
+        Ok(self.get_data().unwrap())
     }
 }
 
@@ -204,7 +222,6 @@ impl<'a> Wire<'a> for SapRouter<'a> {
         match self {
             SapRouter::Pong => {
                 encode_null_terminated_string(SAP_ROUTER_PONG, buffer);
-                buffer.push(SAP_ROUTER_VERSION);
             }
             SapRouter::Route {
                 ni_version,
@@ -259,7 +276,6 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                 text,
             } => {
                 encode_null_terminated_string(SAP_ROUTER_ERROR_INFORMATION, buffer);
-                buffer.push(SAP_ROUTER_VERSION);
                 buffer.push(*ni_version);
                 buffer.push(*operation_code);
                 buffer.extend_from_slice(&return_code.to_be_bytes()[..]);
@@ -271,13 +287,7 @@ impl<'a> Wire<'a> for SapRouter<'a> {
     }
 
     fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>> {
-        let (rest, r#type) = context(
-            "SAP Router type",
-            terminated(
-                decode_null_terminated_string,
-                context("version", verify(be_u8, |&v| v == 2)),
-            ),
-        )(input)?;
+        let (rest, r#type) = context("SAP Router type", decode_null_terminated_string)(input)?;
 
         match r#type.as_ref() {
             SAP_ROUTER_PONG => Ok((rest, Self::Pong)),
@@ -296,7 +306,7 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                 ) = context(
                     "SAP Router Route",
                     tuple((
-                        be_u8,
+                        preceded(verify(be_u8, |&route_info_ver| route_info_ver == 2), be_u8),
                         be_u8,
                         TalkMode::decode,
                         be_u16,
