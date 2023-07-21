@@ -9,5 +9,4 @@ edition = "2021"
 socks-parser = { git = "https://github.com/mephesto1337/socks-parser", version = "0.1.0" }
 nom = "7"
 tokio = { version = "1", features = ["full"] }
-pin-project-lite = "0.2"
 clap = { version = "4", features = ["derive"] }

@@ -65,16 +65,19 @@ impl SapNi {
         }
     }
 
-    fn append_data(&mut self, buf: &[u8]) {
+    fn set_data(&mut self, buf: &[u8]) {
+        self.buffer.clear();
         self.buffer.reserve(buf.len() + size_of::<u32>());
         let size = buf.len() as u32;
         self.buffer.extend_from_slice(&size.to_be_bytes()[..]);
         self.buffer.extend_from_slice(buf);
     }
 
-    fn set_data(&mut self, buf: &[u8]) {
-        self.buffer.clear();
-        self.append_data(buf);
+    fn set_len(&mut self, len: usize) {
+        assert!(self.buffer.len() >= len + size_of::<u32>());
+        let len: u32 = len.try_into().unwrap();
+
+        self.buffer[..size_of::<u32>()].copy_from_slice(&len.to_be_bytes()[..]);
     }
 
     pub async fn extract_from_reader<'s, R: AsyncReadExt + Unpin>(

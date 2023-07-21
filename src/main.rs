@@ -144,8 +144,8 @@ async fn handle_client(sap_router: SocketAddr, mut stream: TcpStream) -> io::Res
     };
 
     let mut sap_ni_stream = sap::SapNiStream::new(sap_stream);
-
-    tokio::io::copy_bidirectional(&mut stream, &mut sap_ni_stream).await?;
+    sap_ni_stream.pipe(&mut stream).await?;
+    // tokio::io::copy_bidirectional(&mut stream, &mut sap_stream).await?;
 
     Ok(())
 }

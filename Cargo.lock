@@ -384,7 +384,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "nom",
- "pin-project-lite",
  "socks-parser",
  "tokio",
 ]
