@@ -10,3 +10,10 @@ socks-parser = { git = "https://github.com/mephesto1337/socks-parser", version =
 nom = "7"
 tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
+log = "0.4"
+tracing-subscriber = { version = "0.3", features = [
+    "ansi",
+    "env-filter",
+    "fmt",
+    "std",
+] }

@@ -1,7 +1,13 @@
 use clap::Parser;
-use std::{io, net::SocketAddr};
+use socks_parser::{ConnectionRequest, Destination, Server};
+use std::{
+    io,
+    net::SocketAddr,
+    ptr,
+    sync::atomic::{AtomicPtr, Ordering},
+};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::AsyncWriteExt,
     net::{TcpListener, TcpStream},
 };
 
@@ -16,6 +22,8 @@ struct Options {
     #[clap(short, long, default_value_t = 1080)]
     bind_port: u16,
 }
+
+static SAP_ROUTER: AtomicPtr<SocketAddr> = AtomicPtr::new(ptr::null_mut());
 
 fn map_nom_error(e: nom::Err<nom::error::VerboseError<&[u8]>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{e:x?}"))
@@ -66,104 +74,45 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
     }
 }
 
-async fn handle_client(sap_router: SocketAddr, mut stream: TcpStream) -> io::Result<()> {
-    let mut buffer = Vec::new();
-
-    let n = stream.read_buf(&mut buffer).await?;
-
-    let (_, hello) =
-        socks_parser::decode_socks_request_hello(&buffer[..n]).map_err(map_nom_error)?;
-    if hello
-        .methods
-        .contains(&socks_parser::AuthenticationMethod::None)
-    {
-        let response = socks_parser::response::Hello {
-            version: socks_parser::Version::Socks5,
-            method: socks_parser::AuthenticationMethod::None,
-        };
-        buffer.clear();
-        socks_parser::encode_socks_response_hello(&response, &mut buffer);
-        stream.write_all(&buffer[..]).await?;
-    } else {
-        let response = socks_parser::response::Hello {
-            version: socks_parser::Version::Socks5,
-            method: socks_parser::AuthenticationMethod::None,
-        };
-        socks_parser::encode_socks_response_hello(&response, &mut buffer);
-        stream.write_all(&buffer[..]).await?;
-        return Ok(());
-    }
-
-    buffer.clear();
-    let n = stream.read_buf(&mut buffer).await?;
-
-    let (_, request) = socks_parser::decode_socks_request(&buffer[..n]).map_err(map_nom_error)?;
-    if request.command != socks_parser::Command::Connect {
-        let response = socks_parser::response::Response {
-            version: socks_parser::Version::Socks5,
-            status: socks_parser::response::Status::CommandNotSupported,
-            addr: request.addr,
-            port: request.port,
-        };
-        buffer.clear();
-        socks_parser::encode_socks_response(&response, &mut buffer);
-        stream.write_all(&buffer[..]).await?;
-        return Ok(());
-    }
-    let host = match request.addr {
-        socks_parser::AddressType::IPv4(ip4) => format!("{}", ip4),
-        socks_parser::AddressType::DomainName(ref n) => n.clone(),
-        socks_parser::AddressType::IPv6(ip6) => format!("[{}]", ip6),
+async fn handle_request(req: ConnectionRequest) -> io::Result<(TcpStream, Destination)> {
+    let addr = *unsafe { &*SAP_ROUTER.load(Ordering::Relaxed) };
+    let host = match req.destination.addr {
+        socks_parser::v5::AddressType::IPv4(i) => format!("{i}"),
+        socks_parser::v5::AddressType::DomainName(n) => n,
+        socks_parser::v5::AddressType::IPv6(i) => format!("[{i}]"),
     };
+    let stream = sap_connect(addr, host.as_str(), req.destination.port).await?;
 
-    let sap_stream = match sap_connect(sap_router, &host, request.port).await {
-        Ok(s) => {
-            let response = socks_parser::response::Response {
-                version: socks_parser::Version::Socks5,
-                status: socks_parser::response::Status::Success,
-                addr: request.addr,
-                port: request.port,
-            };
-            buffer.clear();
-            socks_parser::encode_socks_response(&response, &mut buffer);
-            stream.write_all(&buffer[..]).await?;
-            s
-        }
-        Err(e) => {
-            let response = socks_parser::response::Response {
-                version: socks_parser::Version::Socks5,
-                status: socks_parser::response::Status::GeneralFailure,
-                addr: request.addr,
-                port: request.port,
-            };
-            buffer.clear();
-            socks_parser::encode_socks_response(&response, &mut buffer);
-            stream.write_all(&buffer[..]).await?;
-            return Err(e);
-        }
-    };
+    let remote_addr = stream.peer_addr()?;
+    log::info!(
+        "{host}:{port} -> {res}:{port}",
+        res = remote_addr.ip(),
+        port = remote_addr.port(),
+    );
+    Ok((stream, remote_addr.into()))
+}
 
-    let mut sap_ni_stream = sap::SapNiStream::new(sap_stream);
-    sap_ni_stream.pipe(&mut stream).await?;
-    // tokio::io::copy_bidirectional(&mut stream, &mut sap_stream).await?;
-
-    Ok(())
+async fn handle_stream(mut local: TcpStream, remote: TcpStream) -> io::Result<()> {
+    let mut sap_ni = sap::SapNiStream::new(remote);
+    sap_ni.pipe(&mut local).await
 }
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
     let args = Options::parse();
     dbg!(&args);
 
     let listener = TcpListener::bind(("127.0.0.1", args.bind_port)).await?;
+    let server = Server::new(listener);
 
-    loop {
-        let (client, addr) = listener.accept().await?;
-        let sap_router = args.sap_router.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_client(sap_router, client).await {
-                eprintln!("Issue with client {addr}: {e}");
-            }
-        });
-    }
+    SAP_ROUTER.store(Box::into_raw(Box::new(args.sap_router)), Ordering::Relaxed);
+
+    server.run(handle_request, handle_stream).await?;
+
+    Ok(())
 }
