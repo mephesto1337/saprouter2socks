@@ -5,6 +5,7 @@ use std::{
     net::SocketAddr,
     ptr,
     sync::atomic::{AtomicPtr, Ordering},
+    time::Duration,
 };
 use tokio::{
     io::AsyncWriteExt,
@@ -18,9 +19,20 @@ use crate::sap::SapRouter;
 
 #[derive(Debug, Parser)]
 struct Options {
-    sap_router: SocketAddr,
-    #[clap(short, long, default_value_t = 1080)]
-    bind_port: u16,
+    /// SAP router port to use
+    #[clap(short, long, default_value_t = 3299)]
+    sap_port: u16,
+
+    /// Local port to use for socks proxy
+    #[clap(short, long, default_value = "127.0.0.1:1080")]
+    bind_addr: SocketAddr,
+
+    /// Timeout for connection
+    #[clap(short, long, default_value_t = 1000)]
+    timeout_ms: u64,
+
+    /// SAP Router address
+    sap_router: String,
 }
 
 static SAP_ROUTER: AtomicPtr<SocketAddr> = AtomicPtr::new(ptr::null_mut());
@@ -97,6 +109,47 @@ async fn handle_stream(mut local: TcpStream, remote: TcpStream) -> io::Result<()
     sap_ni.pipe(&mut local).await
 }
 
+async fn connect_timeout(addr: SocketAddr, timeout_ms: u64) -> io::Result<TcpStream> {
+    let sleep = tokio::time::sleep(Duration::from_millis(timeout_ms));
+    tokio::pin!(sleep);
+
+    tokio::select! {
+        v = TcpStream::connect(addr) => {
+            v
+        }
+        _ = &mut sleep => {
+            Err(io::Error::new(io::ErrorKind::TimedOut, format!("Timeout exceeded while connecting to {addr}")))
+        }
+    }
+}
+
+async fn find_sap_router(host: &str, port: u16, timeout_ms: u64) -> io::Result<()> {
+    let addrs: Vec<_> = tokio::net::lookup_host((host, port))
+        .await?
+        .map(|addr| {
+            Box::pin(async move {
+                log::debug!("Trying SAP Router at {addr}...");
+                connect_timeout(addr, timeout_ms).await
+            })
+        })
+        .collect();
+    let stream = match futures::future::select_ok(addrs.into_iter()).await {
+        Ok((s, _)) => s,
+        Err(e) => {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("Could not found a valid SAP Router at {host}:{port}: {e}",),
+            ));
+        }
+    };
+
+    let addr = stream.peer_addr()?;
+    log::info!("Found valid SAP Router at {addr}");
+    SAP_ROUTER.store(Box::into_raw(Box::new(addr)), Ordering::Relaxed);
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> io::Result<()> {
     tracing_subscriber::fmt()
@@ -105,12 +158,16 @@ async fn main() -> io::Result<()> {
         .init();
 
     let args = Options::parse();
-    dbg!(&args);
 
-    let listener = TcpListener::bind(("127.0.0.1", args.bind_port)).await?;
+    find_sap_router(args.sap_router.as_str(), args.sap_port, args.timeout_ms).await?;
+
+    let listener = TcpListener::bind(&args.bind_addr).await?;
+    if let Ok(addr) = listener.local_addr() {
+        log::info!("Listening on {addr}");
+    } else {
+        log::info!("Listening on {addr}", addr = &args.bind_addr);
+    }
     let server = Server::new(listener);
-
-    SAP_ROUTER.store(Box::into_raw(Box::new(args.sap_router)), Ordering::Relaxed);
 
     server.run(handle_request, handle_stream).await?;
 

@@ -6,14 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-socks-parser = { git = "https://github.com/mephesto1337/socks-parser", version = "0.1.0" }
-nom = "7"
-tokio = { version = "1", features = ["full"] }
 clap = { version = "4", features = ["derive"] }
+futures = "0.3"
 log = "0.4"
-tracing-subscriber = { version = "0.3", features = [
-    "ansi",
-    "env-filter",
-    "fmt",
-    "std",
-] }
+nom = "7"
+socks-parser = { git = "https://github.com/mephesto1337/socks-parser", version = "0.1.0" }
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = [ "ansi", "env-filter", "fmt", "std" ] }
