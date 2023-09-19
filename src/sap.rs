@@ -13,7 +13,7 @@ use nom::{
     number::streaming::{be_u16, be_u32, be_u8},
     sequence::{preceded, terminated, tuple},
 };
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub trait Wire<'a>: Sized {
     fn encode_into(&self, buffer: &mut Vec<u8>);
@@ -73,6 +73,21 @@ impl SapNi {
         self.buffer.extend_from_slice(buf);
     }
 
+    pub async fn read_from_raw_reader<R: AsyncRead + Unpin>(
+        &mut self,
+        reader: &mut R,
+    ) -> io::Result<usize> {
+        self.clear();
+        let n = reader.read_buf(&mut self.buffer).await?;
+        self.set_len(n);
+        Ok(n)
+    }
+
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+        self.buffer.extend_from_slice(&0u32.to_be_bytes()[..]);
+    }
+
     fn set_len(&mut self, len: usize) {
         assert!(self.buffer.len() >= len + size_of::<u32>());
         let len: u32 = len.try_into().unwrap();
@@ -80,20 +95,36 @@ impl SapNi {
         self.buffer[..size_of::<u32>()].copy_from_slice(&len.to_be_bytes()[..]);
     }
 
-    pub async fn extract_from_reader<'s, R: AsyncReadExt + Unpin>(
+    pub async fn read_from_ni_reader<'s, R: AsyncRead + Unpin>(
         &'s mut self,
         reader: &'_ mut R,
     ) -> io::Result<&'s [u8]> {
-        self.buffer.resize(size_of::<u32>(), 0u8);
+        self.clear();
 
         reader.read_exact(&mut self.buffer[..]).await?;
 
         let obj_size = self.get_buffer_len().unwrap();
 
-        self.buffer.resize(self.buffer.len() + obj_size, 0u8);
-        reader
-            .read_exact(&mut self.buffer[size_of::<u32>()..])
-            .await?;
+        self.buffer.reserve(obj_size);
+
+        // SAFETY:
+        // - As we just reserve `obj_size` bytes, the following length is valid
+        // - ptr comes from a valid memory location
+        // - the cast is OK because MaybeUninit<u8> and u8 have the same memory layout
+        let buffer = unsafe {
+            std::slice::from_raw_parts_mut(
+                self.buffer.spare_capacity_mut().as_mut_ptr().cast(),
+                obj_size,
+            )
+        };
+        let n = reader.read_exact(buffer).await?;
+
+        // SAFETY:
+        // - `n` more are initialized through `read_exact`
+        // - `n + size_of::<u32>()` is lesser or equal to buffer capacity by construction
+        unsafe {
+            self.buffer.set_len(n + size_of::<u32>());
+        };
 
         Ok(self.get_data().unwrap())
     }

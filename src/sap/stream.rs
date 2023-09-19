@@ -1,6 +1,6 @@
 use std::{fmt, io};
 
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use super::SapNi;
 
@@ -13,7 +13,7 @@ pub struct SapNiStream<S> {
 
 impl<S> SapNiStream<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    S: AsyncRead + AsyncWrite + Unpin + Send,
 {
     pub fn new(stream: S) -> Self {
         Self {
@@ -37,15 +37,14 @@ where
         self.write_buf.set_data(&[][..]);
         loop {
             tokio::select! {
-                Ok(n) = stream.read_buf(&mut self.write_buf.buffer) => {
+                Ok(n) = self.write_buf.read_from_raw_reader(stream) => {
                     if n == 0 {
                         break;
                     }
-                    self.write_buf.set_len(n);
                     self.inner.write_all(&self.write_buf.buffer[..]).await?;
                     self.write_buf.buffer.clear();
-                },
-                Ok(data) = self.read_buf.extract_from_reader(&mut self.inner) => {
+                }
+                Ok(data) = self.read_buf.read_from_ni_reader(&mut self.inner) => {
                     stream.write_all(data).await?;
                 },
             }

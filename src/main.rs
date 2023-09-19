@@ -65,7 +65,7 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
 
     stream.write_all(sap_buffer.as_ref()).await?;
 
-    let data = sap_buffer.extract_from_reader(&mut stream).await?;
+    let data = sap_buffer.read_from_ni_reader(&mut stream).await?;
 
     match SapRouter::decode(data).map_err(map_nom_error)?.1 {
         SapRouter::Pong => Ok(stream),
