@@ -13,7 +13,7 @@ pub struct SapNiStream<S> {
 
 impl<S> SapNiStream<S>
 where
-    S: AsyncRead + AsyncWrite + Unpin + Send,
+    S: AsyncRead + AsyncWrite + Unpin,
 {
     pub fn new(stream: S) -> Self {
         Self {
