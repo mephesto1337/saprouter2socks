@@ -8,9 +8,9 @@ use std::{
 use nom::{
     bytes::streaming::{tag, take, take_while},
     combinator::{map, map_opt, verify},
-    error::{context, ContextError, ErrorKind, VerboseError},
+    error::{ContextError, ErrorKind, VerboseError, context},
     multi::{length_data, many_m_n},
-    number::streaming::{be_u16, be_u32, be_u8},
+    number::streaming::{be_u8, be_u16, be_u32},
     sequence::{preceded, terminated, tuple},
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
@@ -198,6 +198,7 @@ impl From<SocketAddr> for SapRouterHop<'static> {
     }
 }
 
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 #[repr(u8)]
@@ -379,7 +380,11 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                 }
 
                 let (_, cur) = SapRouterHop::decode(&hops_data[route_offset as usize..])?;
-                let Some(current_position) = hops.iter().enumerate().find_map(|(i, h)| (h == &cur).then_some(i)) else {
+                let Some(current_position) = hops
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, h)| (h == &cur).then_some(i))
+                else {
                     let e = nom::error::make_error(input, ErrorKind::Verify);
                     let e = ContextError::add_context(
                         input,

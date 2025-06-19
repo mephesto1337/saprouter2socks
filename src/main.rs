@@ -77,12 +77,11 @@ async fn sap_connect(addr: SocketAddr, host: &str, port: u16) -> io::Result<TcpS
             } else {
                 text.into()
             };
-            Err(io::Error::new(io::ErrorKind::Other, msg))
+            Err(io::Error::other(msg))
         }
-        r => Err(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Unexpected SapRouter variant: {r:?}"),
-        )),
+        r => Err(io::Error::other(format!(
+            "Unexpected SapRouter variant: {r:?}"
+        ))),
     }
 }
 
