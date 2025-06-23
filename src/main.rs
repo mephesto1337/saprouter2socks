@@ -37,7 +37,7 @@ struct Options {
 
 static SAP_ROUTER: AtomicPtr<SocketAddr> = AtomicPtr::new(ptr::null_mut());
 
-fn map_nom_error(e: nom::Err<nom::error::VerboseError<&[u8]>>) -> io::Error {
+fn map_nom_error(e: nom::Err<nom::error::Error<&[u8]>>) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, format!("{e:x?}"))
 }
 

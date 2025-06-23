@@ -6,18 +6,19 @@ use std::{
 };
 
 use nom::{
+    Parser,
     bytes::streaming::{tag, take, take_while},
     combinator::{map, map_opt, verify},
-    error::{ContextError, ErrorKind, VerboseError, context},
+    error::{ContextError, ErrorKind, context},
     multi::{length_data, many_m_n},
     number::streaming::{be_u8, be_u16, be_u32},
-    sequence::{preceded, terminated, tuple},
+    sequence::{preceded, terminated},
 };
 use tokio::io::{AsyncRead, AsyncReadExt};
 
 pub trait Wire<'a>: Sized {
     fn encode_into(&self, buffer: &mut Vec<u8>);
-    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>>;
+    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, nom::error::Error<&'a [u8]>>;
 }
 
 mod stream;
@@ -144,22 +145,23 @@ impl<'a> Wire<'a> for SapRouterHop<'a> {
         encode_null_terminated_string(&self.password, buffer);
     }
 
-    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>> {
+    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, nom::error::Error<&'a [u8]>> {
         context(
             "SAP Router hop",
             map(
-                tuple((
+                (
                     decode_null_terminated_string,
                     decode_null_terminated_string,
                     decode_null_terminated_string,
-                )),
+                ),
                 |(hostname, port, password)| Self {
                     hostname,
                     port,
                     password,
                 },
             ),
-        )(input)
+        )
+        .parse(input)
     }
 }
 
@@ -213,8 +215,8 @@ impl<'a> Wire<'a> for TalkMode {
         buffer.push(*self as u8);
     }
 
-    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>> {
-        let (rest, tm) = context("Talk mode", be_u8)(input)?;
+    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, nom::error::Error<&'a [u8]>> {
+        let (rest, tm) = context("Talk mode", be_u8).parse(input)?;
         match tm {
             0 => Ok((rest, Self::MsgIo)),
             1 => Ok((rest, Self::RawIo)),
@@ -321,8 +323,9 @@ impl<'a> Wire<'a> for SapRouter<'a> {
         }
     }
 
-    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, VerboseError<&'a [u8]>> {
-        let (rest, r#type) = context("SAP Router type", decode_null_terminated_string)(input)?;
+    fn decode(input: &'a [u8]) -> nom::IResult<&'a [u8], Self, nom::error::Error<&'a [u8]>> {
+        let (rest, r#type) =
+            context("SAP Router type", decode_null_terminated_string).parse(input)?;
 
         match r#type.as_ref() {
             SAP_ROUTER_PONG => Ok((rest, Self::Pong)),
@@ -340,7 +343,7 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                     ),
                 ) = context(
                     "SAP Router Route",
-                    tuple((
+                    (
                         preceded(verify(be_u8, |&route_info_ver| route_info_ver == 2), be_u8),
                         be_u8,
                         TalkMode::decode,
@@ -348,8 +351,9 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                         be_u8,
                         be_u32,
                         be_u32,
-                    )),
-                )(rest)?;
+                    ),
+                )
+                .parse(rest)?;
 
                 if route_offset > route_length {
                     let e = nom::error::make_error(input, ErrorKind::Verify);
@@ -362,8 +366,8 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                 }
 
                 let (rest, hops_data) = take(route_length as usize)(rest)?;
-                let (rest_hops, hops) =
-                    many_m_n(1, entries_count as usize, SapRouterHop::decode)(hops_data)?;
+                let (rest_hops, hops) = many_m_n(1, entries_count as usize, SapRouterHop::decode)
+                    .parse_complete(hops_data)?;
 
                 if !rest_hops.is_empty() {
                     eprintln!("Unparsed data in SapRouterHop: {:?}", rest_hops);
@@ -408,14 +412,14 @@ impl<'a> Wire<'a> for SapRouter<'a> {
             SAP_ROUTER_ERROR_INFORMATION => context(
                 "SAP Router Error information",
                 map(
-                    tuple((
+                    (
                         be_u8,
                         terminated(be_u8, be_u8),
                         be_u32,
                         map_opt(length_data(be_u32), |d| {
                             std::str::from_utf8(d).ok().map(|s| s.into())
                         }),
-                    )),
+                    ),
                     |(ni_version, operation_code, return_code, text)| Self::ErrorInformation {
                         ni_version,
                         operation_code,
@@ -423,7 +427,8 @@ impl<'a> Wire<'a> for SapRouter<'a> {
                         text,
                     },
                 ),
-            )(rest),
+            )
+            .parse(rest),
             _ => Err(nom::Err::Failure(nom::error::make_error(
                 input,
                 ErrorKind::NoneOf,
@@ -442,9 +447,10 @@ where
             map_opt(take_while(|b| b != 0), |d| {
                 std::str::from_utf8(d).ok().map(|s| s.into())
             }),
-            tag(b"\0"),
+            tag(&b"\0"[..]),
         ),
-    )(input)
+    )
+    .parse(input)
 }
 
 fn encode_null_terminated_string(s: &str, buffer: &mut Vec<u8>) {
