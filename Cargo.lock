@@ -362,12 +362,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
-name = "minimal-lexical"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
-
-[[package]]
 name = "miniz_oxide"
 version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -385,16 +379,6 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys",
-]
-
-[[package]]
-name = "nom"
-version = "7.1.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d273983c5a657a70a3e8f2a01329822f3b8c8172b73826411a55751e404a0a4a"
-dependencies = [
- "memchr",
- "minimal-lexical",
 ]
 
 [[package]]
@@ -574,12 +558,12 @@ dependencies = [
 
 [[package]]
 name = "sap-router2socks"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "clap",
  "futures",
  "log",
- "nom 8.0.0",
+ "nom",
  "socks-parser",
  "tokio",
  "tracing-subscriber",
@@ -636,12 +620,12 @@ dependencies = [
 
 [[package]]
 name = "socks-parser"
-version = "0.1.0"
-source = "git+https://github.com/mephesto1337/socks-parser#9a8ffae1c8395e18bd6f8f5aa503bfa30245f9b7"
+version = "0.2.0"
+source = "git+https://github.com/mephesto1337/socks-parser#d81c70b54d74b31ed68dfb3ab2d52849471c936d"
 dependencies = [
- "log",
- "nom 7.1.3",
+ "nom",
  "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -710,7 +694,19 @@ checksum = "8ce8c33a8d48bd45d624a6e523445fd21ec13d3653cd51f681abf67418f54eb8"
 dependencies = [
  "cfg-if",
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "81383ab64e72a7a8b8e13130c49e3dab29def6d0c7d76a03087b3cf71c5c6903"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
